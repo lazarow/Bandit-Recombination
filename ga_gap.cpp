@@ -30,7 +30,7 @@ const int CROSSOVER_STRATEGY_UNIFORM = 2;
 // Genetic algorithm parameters
 unsigned int population_size = 1000;
 unsigned int elitism_size = 50;
-unsigned int generations = 400;
+unsigned int generations = 200;
 double mutation_rate = 0.15;
 unsigned int seed = 0;
 int mutation_strategy = MUTATION_STRATEGY_NAIVE;
@@ -39,10 +39,10 @@ int crossover_strategy = CROSSOVER_STRATEGY_TWO_POINT;
 unsigned int tournament_size = 8;
 
 // Probabilistic Bandit Recombination (PBR) operator BEGIN
-unsigned int pbr_samples_size = 50;
+unsigned int pbr_samples_size = 10;
 unsigned int pbr_offsprings_size = 0;
-double pbr_epsilon = 0.5;
-double pbr_discount_factor = 0.9;
+double pbr_epsilon = 0.9;
+double pbr_discount_factor = 0.75;
 // Probabilistic Bandit Recombination (PBR) operator END
 
 // Random (baseline) BEGIN
@@ -66,13 +66,8 @@ typedef vector<Individual> Population;
 
 // Debug
 bool debug = false;
-void dump_state(
-    const int current_generation,
-    const Population &population,
-    const vector<int> &fitnesses,
-    const int best_fitness,
-    const Individual &best_individual
-);
+void dump_state(const int current_generation, const Population &population, const vector<int> &fitnesses,
+                const int best_fitness, const Individual &best_individual, const int best_fitness_source);
 
 int rand_int(const int min, const int max);
 double rand_double();
@@ -88,14 +83,11 @@ unsigned int getMaximumFitness() {
     unsigned int maximum_fitness = 0;
     for (int i = 0; i < nof_agents; i++) {
         maximum_fitness += 1000 * capacity[i];
-        for (int j = 0; j < nof_tasks; j++) {
-            maximum_fitness += cost[i][j];
-        }
     }
     return maximum_fitness;
 }
 vector<vector<double>> calculateEstimatedValues(const vector<vector<double>> &discountedSumOfRewards,
-                                          const vector<vector<double>> &discountedCountOfPulls) {
+                                                const vector<vector<double>> &discountedCountOfPulls) {
     vector<vector<double>> estimated_values(nof_tasks, vector<double>(nof_agents, 0));
     for (int i = 0; i < nof_tasks; i++) {
         for (int j = 0; j < nof_agents; j++) {
@@ -167,9 +159,11 @@ void run() {
         for (int i = 0; i < pbr_samples_size; i++) {
             for (int j = 0; j < nof_tasks; j++) {
                 unsigned int agent = population[indices[i]][j];
-                discountedSumOfRewards[j][agent] = (1 - pbr_discount_factor) * discountedSumOfRewards[j][agent] +
-                                                   pbr_discount_factor * (1 - (double)fitnesses[indices[i]] / maximum_fitness);
-                discountedCountOfPulls[j][agent] = (1 - pbr_discount_factor) * discountedCountOfPulls[j][agent] + pbr_discount_factor;
+                discountedSumOfRewards[j][agent] =
+                    (1 - pbr_discount_factor) * discountedSumOfRewards[j][agent] +
+                    pbr_discount_factor * (1 - (double)fitnesses[indices[i]] / maximum_fitness);
+                discountedCountOfPulls[j][agent] =
+                    (1 - pbr_discount_factor) * discountedCountOfPulls[j][agent] + pbr_discount_factor;
             }
         }
         if (pbr_offsprings_size > 0) {
@@ -181,16 +175,17 @@ void run() {
         }
         // Probabilistic Bandit Recombination (PBR) operator END
 
-        for (int i = elitism_size + pbr_offsprings_size; i < elitism_size + pbr_offsprings_size + random_offsprings_size; i++)
-        {
+        // Random
+        for (int i = elitism_size + pbr_offsprings_size;
+             i < elitism_size + pbr_offsprings_size + random_offsprings_size; i++) {
             Individual individual(nof_tasks);
             for (int j = 0; j < nof_tasks; j++) {
                 individual[j] = rand_int(0, nof_agents - 1);
             }
             next_population[i] = individual;
         }
-        
 
+        // Crossover and mutation
         for (int i = elitism_size + pbr_offsprings_size + random_offsprings_size; i < population_size; i += 2) {
             Individual parent1 = selection(population, fitnesses);
             Individual parent2 = selection(population, fitnesses);
@@ -205,14 +200,26 @@ void run() {
 
         // Find the best individual in the next population
         population = next_population;
-        int best_fitness_in_generation = fitnesses[indices[0]];
+        int best_fitness_source = -1;
         for (int i = 0; i < population_size; i++) {
             fitnesses[i] = evaluate_individual(population[i]);
             if (fitnesses[i] < best_fitness) {
                 best_fitness = fitnesses[i];
                 best_individual = population[i];
                 improvement = true;
+                if (i >= elitism_size && i < elitism_size + pbr_offsprings_size) {
+                    best_fitness_source = 2;
+                } else if (i >= elitism_size + pbr_offsprings_size &&
+                           i < elitism_size + pbr_offsprings_size + random_offsprings_size) {
+                    best_fitness_source = 3;
+                } else {
+                    best_fitness_source = 1;  // crossover and mutation
+                }
             }
+        }
+        if (best_fitness_source != -1 && best_fitness_source != 2) {
+            discountedSumOfRewards = vector<vector<double>>(nof_tasks, vector<double>(nof_agents, 0));
+            discountedCountOfPulls = vector<vector<double>>(nof_tasks, vector<double>(nof_agents, 1));
         }
 
         if (improvement) {
@@ -221,7 +228,7 @@ void run() {
         }
 
         if (debug) {
-            dump_state(g + 1, population, fitnesses, best_fitness, best_individual);
+            dump_state(g + 1, population, fitnesses, best_fitness, best_individual, best_fitness_source);
             cout << "[Debug Mode] Press any key to continue..." << endl;
             cin.get();
         }
@@ -513,13 +520,8 @@ pair<Individual, Individual> crossover(const Individual &parent1, const Individu
     return make_pair(child1, child2);
 }
 
-void dump_state(
-    const int current_generation,
-    const Population &population,
-    const vector<int> &fitnesses,
-    const int best_fitness,
-    const Individual &best_individual
-) {
+void dump_state(const int current_generation, const Population &population, const vector<int> &fitnesses,
+                const int best_fitness, const Individual &best_individual, const int best_fitness_source) {
     JSON state;
     state["current_generation"] = current_generation;
     state["total_generations"] = generations;
@@ -539,6 +541,7 @@ void dump_state(
     state["nof_tasks"] = nof_tasks;
     state["nof_agents"] = nof_agents;
     state["best_fitness"] = best_fitness;
+    state["best_fitness_source"] = best_fitness_source;
     state["best_individual"] = Array();
     for (int i = 0; i < nof_tasks; i++) {
         state["best_individual"].append(best_individual[i]);
