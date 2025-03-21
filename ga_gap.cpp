@@ -28,9 +28,9 @@ const int CROSSOVER_STRATEGY_TWO_POINT = 1;
 const int CROSSOVER_STRATEGY_UNIFORM = 2;
 
 // Genetic algorithm parameters
-unsigned int population_size = 100;
-unsigned int elitism_size = 5;
-unsigned int generations = 10000;
+unsigned int population_size = 1000;
+unsigned int elitism_size = 50;
+unsigned int generations = 400;
 double mutation_rate = 0.15;
 unsigned int seed = 0;
 int mutation_strategy = MUTATION_STRATEGY_NAIVE;
@@ -39,11 +39,15 @@ int crossover_strategy = CROSSOVER_STRATEGY_TWO_POINT;
 unsigned int tournament_size = 8;
 
 // Probabilistic Bandit Recombination (PBR) operator BEGIN
-unsigned int pbr_samples_size = 0;
+unsigned int pbr_samples_size = 50;
 unsigned int pbr_offsprings_size = 0;
+double pbr_epsilon = 0.5;
 double pbr_discount_factor = 0.9;
-double pbr_tau = 1.0;
 // Probabilistic Bandit Recombination (PBR) operator END
+
+// Random (baseline) BEGIN
+unsigned int random_offsprings_size = 0;
+// Random (baseline) END
 
 // Problem parameters and types
 unsigned int nof_tasks;
@@ -59,6 +63,16 @@ vector<vector<int>> demands;
 vector<vector<int>> cost;
 typedef vector<int> Individual;
 typedef vector<Individual> Population;
+
+// Debug
+bool debug = false;
+void dump_state(
+    const int current_generation,
+    const Population &population,
+    const vector<int> &fitnesses,
+    const int best_fitness,
+    const Individual &best_individual
+);
 
 int rand_int(const int min, const int max);
 double rand_double();
@@ -80,45 +94,39 @@ unsigned int getMaximumFitness() {
     }
     return maximum_fitness;
 }
-vector<vector<double>> calculateUCBValues(const vector<vector<double>> &discountedSumOfRewards,
-                                          const vector<vector<double>> &discountedCountOfPulls,
-                                          double total_count_of_pulls) {
-    vector<vector<double>> ucb_values(nof_agents, vector<double>(nof_tasks, 0));
-    for (int i = 0; i < nof_agents; i++) {
-        for (int j = 0; j < nof_tasks; j++) {
-            ucb_values[i][j] = discountedSumOfRewards[i][j] / discountedCountOfPulls[i][j] +
-                               sqrt(2 * log(total_count_of_pulls) / discountedCountOfPulls[i][j]);
+vector<vector<double>> calculateEstimatedValues(const vector<vector<double>> &discountedSumOfRewards,
+                                          const vector<vector<double>> &discountedCountOfPulls) {
+    vector<vector<double>> estimated_values(nof_tasks, vector<double>(nof_agents, 0));
+    for (int i = 0; i < nof_tasks; i++) {
+        for (int j = 0; j < nof_agents; j++) {
+            estimated_values[i][j] = discountedSumOfRewards[i][j] / discountedCountOfPulls[i][j];
         }
     }
-    return ucb_values;
+    return estimated_values;
 }
-vector<vector<double>> calculateSoftmaxProbabilities(const vector<vector<double>> &ucb_values, double tau) {
-    vector<vector<double>> probabilities(nof_agents, vector<double>(nof_tasks, 0));
+vector<int> findBestAgents(const vector<vector<double>> &estimated_values) {
+    vector<int> best_agents(nof_tasks, 0);
     for (int i = 0; i < nof_tasks; i++) {
-        double sum = 0.0;
-        for (int j = 0; j < nof_agents; j++) {
-            sum += ucb_values[j][i];
-        }
-        for (int j = 0; j < nof_agents; j++) {
-            probabilities[j][i] = ucb_values[j][i] / sum;
-        }
-    }
-    return probabilities;
-}
-Individual sampleIndividual(const std::vector<std::vector<double>> &probabilities) {
-    Individual individual(nof_tasks);
-    for (int i = 0; i < nof_tasks; i++) {
-        double rand_value = rand_double();
-        double cumulative_prob = .0;
-        for (int j = 0; j < nof_agents; j++) {
-            cumulative_prob += probabilities[j][i];
-            if (rand_value <= cumulative_prob) {
-                individual[i] = j;
-                break;
+        double best_value = estimated_values[i][0];
+        int best_index = 0;
+        for (int j = 1; j < nof_agents; j++) {
+            if (estimated_values[i][j] > best_value) {
+                best_value = estimated_values[i][j];
+                best_index = j;
             }
         }
-        // If not chosen yet, return a random agent (for safety)
-        individual[i] = rand_int(0, nof_agents - 1);
+        best_agents[i] = best_index;
+    }
+    return best_agents;
+}
+Individual sampleIndividual(const vector<int> &best_agents) {
+    Individual individual(nof_tasks);
+    for (int i = 0; i < nof_tasks; i++) {
+        if (rand_double() < pbr_epsilon) {
+            individual[i] = best_agents[i];
+        } else {
+            individual[i] = rand_int(0, nof_agents - 1);
+        }
     }
     return individual;
 }
@@ -137,9 +145,10 @@ void run() {
 
     // Probabilistic Bandit Recombination (PBR) operator BEGIN
     unsigned int maximum_fitness = getMaximumFitness();
-    vector<vector<double>> discountedSumOfRewards(nof_agents, vector<double>(nof_tasks, 0));
-    vector<vector<double>> discountedCountOfPulls(nof_agents, vector<double>(nof_tasks, 1));
-    unsigned int total_count_of_pulls = 0;
+    vector<vector<double>> discountedSumOfRewards(nof_tasks, vector<double>(nof_agents, 0));
+    vector<vector<double>> discountedCountOfPulls(nof_tasks, vector<double>(nof_agents, 1));
+    vector<vector<double>> estimated_values;
+    vector<int> best_agents;
     // Probabilistic Bandit Recombination (PBR) operator END
 
     // Evolution process
@@ -158,32 +167,31 @@ void run() {
         for (int i = 0; i < pbr_samples_size; i++) {
             for (int j = 0; j < nof_tasks; j++) {
                 unsigned int agent = population[indices[i]][j];
-                discountedSumOfRewards[agent][j] = pbr_discount_factor * discountedSumOfRewards[i][j] +
-                                                   (1 - (double)fitnesses[indices[i]] / maximum_fitness);
-                discountedCountOfPulls[agent][j] = pbr_discount_factor * discountedCountOfPulls[i][j] + 1;
+                discountedSumOfRewards[j][agent] = (1 - pbr_discount_factor) * discountedSumOfRewards[j][agent] +
+                                                   pbr_discount_factor * (1 - (double)fitnesses[indices[i]] / maximum_fitness);
+                discountedCountOfPulls[j][agent] = (1 - pbr_discount_factor) * discountedCountOfPulls[j][agent] + pbr_discount_factor;
             }
-            total_count_of_pulls++;
         }
         if (pbr_offsprings_size > 0) {
-            vector<vector<double>> ucb_values =
-                calculateUCBValues(discountedSumOfRewards, discountedCountOfPulls, total_count_of_pulls);
-            vector<vector<double>> probabilities = calculateSoftmaxProbabilities(ucb_values, pbr_tau);
-            // Print probabilities
-            cout << "Probabilities:" << endl;
-            for (int i = 0; i < nof_agents; i++) {
-                cout << "Agent " << i << ": ";
-                for (int j = 0; j < nof_tasks; j++) {
-                    cout << probabilities[i][j] << " ";
-                }
-                cout << endl;
-            }
+            estimated_values = calculateEstimatedValues(discountedSumOfRewards, discountedCountOfPulls);
+            best_agents = findBestAgents(estimated_values);
             for (int i = elitism_size; i < elitism_size + pbr_offsprings_size; i++) {
-                next_population[i] = sampleIndividual(probabilities);
+                next_population[i] = sampleIndividual(best_agents);
             }
         }
         // Probabilistic Bandit Recombination (PBR) operator END
 
-        for (int i = elitism_size + pbr_offsprings_size; i < population_size; i += 2) {
+        for (int i = elitism_size + pbr_offsprings_size; i < elitism_size + pbr_offsprings_size + random_offsprings_size; i++)
+        {
+            Individual individual(nof_tasks);
+            for (int j = 0; j < nof_tasks; j++) {
+                individual[j] = rand_int(0, nof_agents - 1);
+            }
+            next_population[i] = individual;
+        }
+        
+
+        for (int i = elitism_size + pbr_offsprings_size + random_offsprings_size; i < population_size; i += 2) {
             Individual parent1 = selection(population, fitnesses);
             Individual parent2 = selection(population, fitnesses);
             pair<Individual, Individual> children = crossover(parent1, parent2);
@@ -197,6 +205,7 @@ void run() {
 
         // Find the best individual in the next population
         population = next_population;
+        int best_fitness_in_generation = fitnesses[indices[0]];
         for (int i = 0; i < population_size; i++) {
             fitnesses[i] = evaluate_individual(population[i]);
             if (fitnesses[i] < best_fitness) {
@@ -206,14 +215,18 @@ void run() {
             }
         }
 
-        // Debug
         if (improvement) {
             cout << "Improvement in generation " << (g + 1) << ", the new best fitness: " << best_fitness << endl;
             improvement = false;
         }
+
+        if (debug) {
+            dump_state(g + 1, population, fitnesses, best_fitness, best_individual);
+            cout << "[Debug Mode] Press any key to continue..." << endl;
+            cin.get();
+        }
     }
 
-    // Debug
     // Output the best individual
     cout << "Best solution found: ";
     for (int i = 0; i < nof_tasks; i++) {
@@ -233,7 +246,7 @@ int main(int argc, char *argv[]) {
                 "[--selection-strategy <strategy>] [--crossover-strategy "
                 "<strategy>] [--tournament-size <size>] [--pbr-offsprings-size "
                 "<size>] [--pbr-samples-size <size>] [--pbr-discount-factor "
-                "<rate>] [--pbr-tau <rate>]"
+                "<discount_factor>] [--pbr-epsilon <epsilon>] [--random-offsprings-size <size>] [--debug]"
              << endl;
         return 1;
     }
@@ -264,8 +277,12 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) pbr_samples_size = stoi(argv[++i]);
         } else if (arg == "--pbr-discount-factor") {
             if (i + 1 < argc) pbr_discount_factor = stod(argv[++i]);
-        } else if (arg == "--pbr-tau") {
-            if (i + 1 < argc) pbr_tau = stod(argv[++i]);
+        } else if (arg == "--pbr-epsilon") {
+            if (i + 1 < argc) pbr_epsilon = stod(argv[++i]);
+        } else if (arg == "--random-offsprings-size") {
+            if (i + 1 < argc) random_offsprings_size = stoi(argv[++i]);
+        } else if (arg == "--debug") {
+            debug = true;
         }
     }
 
@@ -281,8 +298,9 @@ int main(int argc, char *argv[]) {
     cout << "Tournament size: " << tournament_size << endl;
     cout << "PBR offsprings size: " << pbr_offsprings_size << endl;
     cout << "PBR samples size: " << pbr_samples_size << endl;
+    cout << "PBR epsilon: " << pbr_epsilon << endl;
     cout << "PBR discount factor: " << pbr_discount_factor << endl;
-    cout << "PBR tau: " << pbr_tau << endl;
+    cout << "Random offsprings size: " << random_offsprings_size << endl;
     cout << endl;
 
     // Set random seed
@@ -493,4 +511,51 @@ pair<Individual, Individual> crossover(const Individual &parent1, const Individu
         }
     }
     return make_pair(child1, child2);
+}
+
+void dump_state(
+    const int current_generation,
+    const Population &population,
+    const vector<int> &fitnesses,
+    const int best_fitness,
+    const Individual &best_individual
+) {
+    JSON state;
+    state["current_generation"] = current_generation;
+    state["total_generations"] = generations;
+    state["population_size"] = population_size;
+    state["elitism_size"] = elitism_size;
+    state["mutation_rate"] = mutation_rate;
+    state["seed"] = seed;
+    state["mutation_strategy"] = mutation_strategy;
+    state["selection_strategy"] = selection_strategy;
+    state["crossover_strategy"] = crossover_strategy;
+    state["tournament_size"] = tournament_size;
+    state["pbr_offsprings_size"] = pbr_offsprings_size;
+    state["pbr_samples_size"] = pbr_samples_size;
+    state["pbr_discount_factor"] = pbr_discount_factor;
+    state["pbr_epsilon"] = pbr_epsilon;
+    state["random_offsprings_size"] = random_offsprings_size;
+    state["nof_tasks"] = nof_tasks;
+    state["nof_agents"] = nof_agents;
+    state["best_fitness"] = best_fitness;
+    state["best_individual"] = Array();
+    for (int i = 0; i < nof_tasks; i++) {
+        state["best_individual"].append(best_individual[i]);
+    }
+    state["population"] = Array();
+    for (const auto &individual : population) {
+        state["population"].append(Array());
+        for (int i = 0; i < nof_tasks; i++) {
+            state["population"][state["population"].length() - 1].append(individual[i]);
+        }
+    }
+    state["fitnesses"] = Array();
+    for (int i = 0; i < population_size; i++) {
+        state["fitnesses"].append(fitnesses[i]);
+    }
+    // Save to file
+    std::ofstream file("state.json");
+    file << state;
+    file.close();
 }
