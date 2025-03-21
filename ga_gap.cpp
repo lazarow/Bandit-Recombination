@@ -134,6 +134,7 @@ void run() {
     Individual best_individual = population[best_individual_index];
 
     bool improvement = true;
+    unsigned int total_improvements = 0;
 
     // Probabilistic Bandit Recombination (PBR) operator BEGIN
     unsigned int maximum_fitness = getMaximumFitness();
@@ -141,6 +142,7 @@ void run() {
     vector<vector<double>> discountedCountOfPulls(nof_tasks, vector<double>(nof_agents, 1));
     vector<vector<double>> estimated_values;
     vector<int> best_agents;
+    unsigned int pbr_improvements = 0;
     // Probabilistic Bandit Recombination (PBR) operator END
 
     // Evolution process
@@ -220,11 +222,14 @@ void run() {
         if (best_fitness_source != -1 && best_fitness_source != 2) {
             discountedSumOfRewards = vector<vector<double>>(nof_tasks, vector<double>(nof_agents, 0));
             discountedCountOfPulls = vector<vector<double>>(nof_tasks, vector<double>(nof_agents, 1));
+        } else if (best_fitness_source == 2) {
+            pbr_improvements++;
         }
 
         if (improvement) {
             cout << "Improvement in generation " << (g + 1) << ", the new best fitness: " << best_fitness << endl;
             improvement = false;
+            total_improvements++;
         }
 
         if (debug) {
@@ -240,6 +245,8 @@ void run() {
         cout << best_individual[i] << " ";
     }
     cout << endl;
+    cout << "Total improvements: " << total_improvements << endl;
+    cout << "PBR improvements: " << pbr_improvements << endl;
     cout << "Total cost: " << best_fitness << endl;
 }
 
