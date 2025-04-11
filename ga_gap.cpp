@@ -47,6 +47,7 @@ double pbr_discount_factor = 0.75;
 
 // Random (baseline) BEGIN
 unsigned int random_offsprings_size = 0;
+bool random_offsprings_by_mutation = false;
 // Random (baseline) END
 
 // Problem parameters and types
@@ -181,8 +182,15 @@ void run() {
         for (int i = elitism_size + pbr_offsprings_size;
              i < elitism_size + pbr_offsprings_size + random_offsprings_size; i++) {
             Individual individual(nof_tasks);
-            for (int j = 0; j < nof_tasks; j++) {
-                individual[j] = rand_int(0, nof_agents - 1);
+            if (random_offsprings_by_mutation) {
+                for (int j = 0; j < nof_tasks; j++) {
+                    individual[j] = population[indices[0]][j];
+                }
+                mutation(individual);
+            } else {
+                for (int j = 0; j < nof_tasks; j++) {
+                    individual[j] = rand_int(0, nof_agents - 1);
+                }
             }
             next_population[i] = individual;
         }
@@ -260,7 +268,8 @@ int main(int argc, char *argv[]) {
                 "[--selection-strategy <strategy>] [--crossover-strategy "
                 "<strategy>] [--tournament-size <size>] [--pbr-offsprings-size "
                 "<size>] [--pbr-samples-size <size>] [--pbr-discount-factor "
-                "<discount_factor>] [--pbr-epsilon <epsilon>] [--random-offsprings-size <size>] [--debug]"
+                "<discount_factor>] [--pbr-epsilon <epsilon>] [--random-offsprings-size <size>] "
+                "[--random-offsprings-by-mutation] [--debug]"
              << endl;
         return 1;
     }
@@ -295,6 +304,8 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) pbr_epsilon = stod(argv[++i]);
         } else if (arg == "--random-offsprings-size") {
             if (i + 1 < argc) random_offsprings_size = stoi(argv[++i]);
+        } else if (arg == "--random-offsprings-by-mutation") {
+            random_offsprings_by_mutation = true;
         } else if (arg == "--debug") {
             debug = true;
         }
