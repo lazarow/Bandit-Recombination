@@ -41,7 +41,7 @@ unsigned int tournament_size = 8;
 // Probabilistic Bandit Recombination (PBR) operator BEGIN
 unsigned int pbr_samples_size = 10;
 unsigned int pbr_offsprings_size = 0;
-double pbr_epsilon = 0.9;
+double pbr_epsilon = 0.1;
 double pbr_discount_factor = 0.75;
 // Probabilistic Bandit Recombination (PBR) operator END
 
@@ -115,7 +115,7 @@ vector<int> findBestAgents(const vector<vector<double>> &estimated_values) {
 Individual sampleIndividual(const vector<int> &best_agents) {
     Individual individual(nof_tasks);
     for (int i = 0; i < nof_tasks; i++) {
-        if (rand_double() < pbr_epsilon) {
+        if (rand_double() < 1 - pbr_epsilon) {
             individual[i] = best_agents[i];
         } else {
             individual[i] = rand_int(0, nof_agents - 1);
